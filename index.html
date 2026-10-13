@@ -61,10 +61,10 @@ main{padding-top:20px;display:grid;gap:18px}
 .summary a{text-decoration:none;font:600 13px var(--f-display);letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;border-radius:7px;background:var(--panel);border:1px solid var(--line);color:inherit}
 .summary a b{font-family:var(--f-mono);font-weight:500;margin-left:6px}
 .summary a.off{opacity:.45}
-section.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}
-section.card h3{font:700 15px var(--f-display);letter-spacing:.08em;text-transform:uppercase;margin:0 0 10px;display:flex;align-items:center;gap:8px}
-section.card h3 .ct{font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0}
-section.card h3::before{content:"";width:10px;height:10px;border-radius:2px;background:var(--k,var(--accent))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}
+.card h3{font:700 15px var(--f-display);letter-spacing:.08em;text-transform:uppercase;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.card h3 .ct{font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0}
+.card h3::before{content:"";width:10px;height:10px;border-radius:2px;background:var(--k,var(--accent))}
 .k-refine{--k:var(--refine)} .k-craft{--k:var(--craft)} .k-cook{--k:var(--cook)} .k-mine{--k:var(--mine)} .k-buy{--k:var(--buy)} .k-use{--k:var(--muted)}
 .rlist{display:grid;gap:0}
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:9px 0;border-top:1px solid var(--line)}
@@ -94,6 +94,17 @@ ul.plain{margin:0;padding-left:18px;display:grid;gap:4px}
 .totals{display:flex;flex-wrap:wrap;gap:6px}
 .note{font-size:13px;color:var(--muted);margin:10px 0 0}
 .note b{color:var(--ink)}
+.pill.ref{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700;margin-right:6px}
+details.cyc>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:2px 12px;align-items:center}
+details.cyc>summary::-webkit-details-marker{display:none}
+details.cyc>summary h3{margin:0}
+details.cyc>summary::after{content:"";grid-column:2;grid-row:1/span 2;width:9px;height:9px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);margin:0 6px 4px 0;transition:transform .15s}
+details.cyc[open]>summary::after{transform:rotate(-135deg);margin:4px 6px 0 0}
+details.cyc>summary .peek{grid-column:1;color:var(--muted);font-size:13px;min-width:0}
+details.cyc[open]>summary{margin-bottom:10px}
+.route{margin-top:12px;padding:12px;border-radius:9px;background:var(--bg)}
+.rsel{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.rsel select{font:inherit;font-size:14px;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);margin-left:4px}
 .welcome h2{font:700 28px var(--f-display);margin:0 0 6px}
 .welcome p{max-width:64ch;margin:0 0 6px;color:var(--muted)}
 footer{color:var(--muted);font-size:12.5px;margin-top:28px;max-width:72ch}
@@ -114,7 +125,7 @@ footer a{color:inherit}
     <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="I need… (e.g. Radon, Chromatic Metal, Warp Cell)" aria-label="Search items" role="combobox" aria-expanded="false" aria-controls="results">
     <div id="results" class="results" role="listbox" hidden></div>
   </div>
-  <div class="quick" id="quick"><span class="lbl">Try:</span></div>
+  <div class="quick" id="quick"><button class="pill ref" data-go="cycles">⟳ Conversion cycles</button><span class="lbl">Try:</span></div>
 </header>
 <main id="main"></main>
 <footer>Recipe data comes from the open-source <a href="https://github.com/AssistantNMS/App" target="_blank" rel="noopener">Assistant for No Man's Sky</a> dataset (extracted from game files, up to the Voyagers-era updates). Mining and buying notes are general guidance; Trade Terminal stock varies by system. Click any ingredient to look it up.</footer>
@@ -277,22 +288,119 @@ function welcome(){
   <p>Search for any item to see every way to get it: refiner recipes, crafting blueprints, Nutrient Processor recipes, where to mine or gather it, and where to buy it.</p>
   <p>Each page also shows what the item is used in, and for crafted items, a full ingredient tree down to base materials.</p></section>`;
 }
+// ---------- conversion cycles reference ----------
+const nid = n => ids.find(id=>I[id].n===n && id.startsWith('raw'));
+const FAMILIES = [
+  {key:'gas', title:'Atmospheric gases', blurb:'Gas Transfer in any refiner. Each step moves one place clockwise.', members:['Sulphurine','Radon','Nitrogen']},
+  {key:'biome', title:'Biome minerals', blurb:'Environmental Element Transfer. Each needs Ferrite Dust or Pure Ferrite as the second input.', members:['Uranium','Pyrite','Paraffinium','Ammonia','Dioxite','Phosphorus']},
+  {key:'junk', title:'Machinery junk', blurb:'Recycle Waste Materials. A one-way chain, not a loop.', members:['Residual Goop','Viscous Fluids','Living Slime','Runaway Mould']},
+];
+FAMILIES.forEach(f=>{
+  f.ids = f.members.map(nid).filter(Boolean);
+  const set = new Set(f.ids);
+  f.edges = {};  // from -> {to, recipes:[]}
+  D.ref.forEach(r=>{ const o=r[1][0]; if(!set.has(o)) return;
+    const mem = r[0].filter(([i])=>set.has(i)); if(mem.length!==1 || mem[0][0]===o) return;
+    const a = mem[0][0]; (f.edges[a] = f.edges[a] || {to:o, recipes:[]}).recipes.push(r); });
+  // order: follow edges from a node with no incoming edge (chain) or the first member (loop)
+  const incoming = new Set(Object.values(f.edges).map(e=>e.to));
+  let s = f.ids.find(i=>!incoming.has(i)) || f.ids[0];
+  f.order = []; while(s && !f.order.includes(s)){ f.order.push(s); s = f.edges[s] && f.edges[s].to; }
+  f.loop = !!(s && s===f.order[0]);
+  f.side = D.ref.filter(r=>set.has(r[1][0]) && !r[0].some(([i])=>set.has(i)) && r[0].every(([i])=>i.startsWith('raw')));
+});
+function ring(f){
+  const n=f.order.length, W=380, H=f.loop?300:150, cx=W/2, cy=H/2, R=f.loop?100:0;
+  const pos = f.order.map((id,i)=> f.loop
+    ? [cx + R*Math.sin(2*Math.PI*i/n), cy - R*Math.cos(2*Math.PI*i/n)]
+    : [40 + i*(W-80)/(n-1), cy]);
+  const r=19; let s='';
+  f.order.forEach((id,i)=>{ if(!f.loop && i===n-1) return; const [x1,y1]=pos[i], [x2,y2]=pos[(i+1)%n];
+    const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy), ux=dx/L, uy=dy/L;
+    s += `<line x1="${x1+ux*(r+4)}" y1="${y1+uy*(r+4)}" x2="${x2-ux*(r+9)}" y2="${y2-uy*(r+9)}" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#ah-${f.key})"/>`; });
+  f.order.forEach((id,i)=>{ const [x,y]=pos[i], it=I[id];
+    const lx = f.loop ? x + (x-cx)/R*34 : x, ly = f.loop ? y + (y-cy)/R*34 + 4 : y + r + 18;
+    const anchor = !f.loop || Math.abs(x-cx)<5 ? 'middle' : (x>cx?'start':'end');
+    const lxx = f.loop && anchor!=='middle' ? (anchor==='start'? x+r+6 : x-r-6) : lx;
+    const lyy = f.loop && anchor!=='middle' ? y+4 : ly;
+    s += `<g data-go="${id}" style="cursor:pointer" role="link" aria-label="${esc(it.n)}"><circle cx="${x}" cy="${y}" r="${r}" fill="${colr(it)}"/><text x="${x}" y="${y+4}" text-anchor="middle" fill="#fff" style="font:700 11px var(--f-display)">${esc(abbr(it))}</text><text x="${lxx}" y="${lyy}" text-anchor="${anchor}" fill="var(--ink)" style="font:600 13px var(--f-body)">${esc(it.n)}</text></g>`; });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block;margin:4px auto 0;overflow:visible" role="img" aria-label="${esc(f.title)} order: ${f.order.map(i=>esc(I[i].n)).join(' to ')}"><defs><marker id="ah-${f.key}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>${s}</svg>`;
+}
+// cheapest route between two members: walk the order, picking per step the variant with the lowest member ratio (ties: cheaper catalyst), or member-only variants
+function route(f, a, b, solo){
+  const steps=[]; let i=f.order.indexOf(a);
+  while(f.order[i]!==b){ const from=f.order[i], e=f.edges[from]; if(!e) return null;
+    let vs = e.recipes; if(solo){ vs = vs.filter(r=>r[0].length===1); if(!vs.length) return null; }
+    const ratio = r => r[0].find(([x])=>x===from)[1]/r[1][1];
+    const extra = r => r[0].filter(([x])=>x!==from).reduce((s,[x,q])=>s+q*(I[x].v||0),0)/r[1][1];
+    vs = vs.slice().sort((p,q)=>ratio(p)-ratio(q) || extra(p)-extra(q));
+    steps.push({from, to:e.to, r:vs[0]}); i=(i+1)%f.order.length; if(steps.length>f.order.length) return null; }
+  let need=1; const extras={};
+  for(let k=steps.length-1;k>=0;k--){ const {from,r}=steps[k]; const runs=need/r[1][1];
+    r[0].forEach(([x,q])=>{ if(x!==from) extras[x]=(extras[x]||0)+q*runs; }); need = runs*r[0].find(([x])=>x===from)[1]; }
+  return {steps, need, extras};
+}
+const cyc = { };
+const cycOpen = new Set();  // all cycle cards start collapsed
+main.addEventListener('toggle', e=>{ const d=e.target; if(!d.dataset || !d.dataset.cy) return; d.open ? cycOpen.add(d.dataset.cy) : cycOpen.delete(d.dataset.cy); }, true);
+function renderCycles(){
+  let h = `<div class="head"><span class="sw" style="background:var(--accent)" aria-hidden="true">⟳</span><div><h2>Conversion cycles</h2><div class="sub">Refiner loops for turning one gas or biome mineral into another. Click any element to open it.</div></div></div><div class="ctrl" style="margin:0"><button data-cyall="open">Expand all</button><button data-cyall="close">Collapse all</button></div>`;
+  FAMILIES.forEach(f=>{
+    if(!f.order.length) return;
+    const c = cyc[f.key] = cyc[f.key] || {a:f.order[0], b:f.order[Math.min(2,f.order.length-1)]};
+    h += `<details class="card k-refine cyc" id="cy-${f.key}" data-cy="${f.key}"${cycOpen.has(f.key)?' open':''}><summary><h3>${esc(f.title)} <span class="ct">${f.loop?'loop':'chain'} · ${f.order.length}</span></h3><span class="peek">${f.order.map(i=>esc(I[i].n)).join(' → ')}${f.loop?' → ↺':''}</span></summary><p class="note" style="margin:0">${esc(f.blurb)}</p>${ring(f)}`;
+    h += `<div class="rlist" style="margin-top:6px">`;
+    f.order.forEach((id,i)=>{ const e=f.edges[id]; if(!e) return;
+      h += `<div class="row" style="flex-direction:column;align-items:stretch;gap:2px"><div class="note" style="margin:0"><b>${esc(I[id].n)} → ${esc(I[e.to].n)}</b></div>${e.recipes.slice().sort((p,q)=>p[0].length-q[0].length).map(r=>recipeRow(r,null,'ref').replace('class="row"','class="row" style="border:0;padding:3px 0"')).join('')}</div>`; });
+    h += `</div>`;
+    // route finder
+    const opts = sel => f.order.map(id=>`<option value="${id}"${id===sel?' selected':''}>${esc(I[id].n)}</option>`).join('');
+    h += `<div class="route"><div class="note" style="margin:0 0 6px"><b>Route finder</b></div><div class="rsel"><label>From <select id="ra-${f.key}" data-route="${f.key}" data-end="a">${opts(c.a)}</select></label><span class="arrow">→</span><label>To <select id="rb-${f.key}" data-route="${f.key}" data-end="b">${opts(c.b)}</select></label></div>`;
+    if(c.a===c.b) h += `<p class="note">Pick two different elements.</p>`;
+    else {
+      const best = route(f,c.a,c.b,false), solo = route(f,c.a,c.b,true);
+      if(!best) h += `<p class="note">No route: this chain only runs one way.</p>`;
+      else {
+        const line = (rt,label) => `<div class="row" style="border:0;padding:4px 0"><span class="note" style="margin:0;min-width:9em"><b>${label}</b></span>${chip(c.a,fmt(rt.need))}${Object.entries(rt.extras).map(([x,q])=>'<span class="plus">+</span>'+chip(x,fmt(q))).join('')}<span class="arrow">→</span>${chip(c.b,1)}</div>`;
+        h += `<p class="note">${best.steps.length} step${best.steps.length>1?'s':''}: ${[c.a,...best.steps.map(s=>s.to)].map(i=>esc(I[i].n)).join(' → ')}</p>`;
+        h += line(best,'Fewest '+I[c.a].n);
+        if(solo && JSON.stringify(Object.keys(solo.extras))!==JSON.stringify(Object.keys(best.extras))) h += line(solo,'No catalyst');
+      }
+    }
+    h += `</div>`;
+    if(f.side.length) h += `<div class="note"><b>Other ways in</b> (from other raw materials)</div><div class="rlist">${limited(f.side.slice().sort((p,q)=>p[0].length-q[0].length).map(r=>recipeRow(r,null,'ref')),'side'+f.key,4)}</div>`;
+    h += `</details>`;
+  });
+  // one-way extras
+  const named = ['Platinum','Basalt','Lithium','Crystallised Helium','Methane','Deuterium'].map(nid).filter(Boolean);
+  const oneway = D.ref.filter(r=>named.includes(r[1][0]) && r[0].every(([i])=>i.startsWith('raw')));
+  const expand = D.ref.filter(r=>r[3]==='Chromatic Expansion');
+  h += `<details class="card k-refine cyc" data-cy="stellar"${cycOpen.has('stellar')?' open':''}><summary><h3>Stellar metals <span class="ct">no colour-to-colour cycle</span></h3><span class="peek">Double any stellar metal with Chromatic Metal</span></summary><p class="note" style="margin:0 0 6px">Stellar metals can't be turned into each other. You can double any of them with Chromatic Metal.</p><div class="rlist">${expand.map(r=>recipeRow(r,null,'ref')).join('')}</div></details>`;
+  h += `<details class="card k-refine cyc" data-cy="oneway"${cycOpen.has('oneway')?' open':''}><summary><h3>One-way upgrades <span class="ct">${oneway.length}</span></h3><span class="peek">${[...new Set(oneway.map(r=>I[r[1][0]].n))].sort().join(' · ')}</span></summary><div class="rlist">${limited(oneway.sort((p,q)=>I[p[1][0]].n.localeCompare(I[q[1][0]].n)).map(r=>recipeRow(r,null,'ref')),'oneway',12)}</div></details>`;  main.innerHTML = h;
+}
+main.addEventListener('change', e=>{ const s=e.target.closest('[data-route]'); if(!s) return;
+  const c=cyc[s.dataset.route]; c[s.dataset.end]=s.value; const id=s.id; rerender(); const el=document.getElementById(id); el&&el.focus(); });
+function rerender(){ if(current==='cycles') renderCycles(); else render(current); }
+
 let current = null;
 function go(id, push=true){
+  if(id==='cycles'){ current='cycles'; resEl.hidden=true; renderCycles(); window.scrollTo({top:0});
+    if(push){ try{ history.pushState(null,'','#cycles'); }catch(e){} } return; }
   if(!I[id]) return; current=id; resEl.hidden=true; qEl.value=''; qEl.blur();
   render(id); window.scrollTo({top:0});
   if(push){ try{ history.pushState(null,'','#'+id); }catch(e){ try{ location.hash=id; }catch(_){} } }
 }
 main.addEventListener('click', e=>{
+  const ca=e.target.closest('[data-cyall]'); if(ca){ const open=ca.dataset.cyall==='open'; main.querySelectorAll('details.cyc').forEach(d=>{ d.open=open; }); return; }
   const tr=e.target.closest('[data-tree]'); if(tr){ const open=tr.dataset.tree==='open'; main.querySelectorAll('.tree details').forEach((d,i)=>{ d.open = open || i===0; }); return; }
-  const s=e.target.closest('[data-sort]'); if(s){ state.refSort=s.dataset.sort; render(current); return; }
-  const mo=e.target.closest('[data-more]'); if(mo){ state['all_'+mo.dataset.more]=true; render(current); return; }
-  const le=e.target.closest('[data-less]'); if(le){ state['all_'+le.dataset.less]=false; render(current); return; }
+  const s=e.target.closest('[data-sort]'); if(s){ state.refSort=s.dataset.sort; rerender(); return; }
+  const mo=e.target.closest('[data-more]'); if(mo){ state['all_'+mo.dataset.more]=true; rerender(); return; }
+  const le=e.target.closest('[data-less]'); if(le){ state['all_'+le.dataset.less]=false; rerender(); return; }
   const j=e.target.closest('[data-jump]'); if(j){ e.preventDefault(); const t=document.getElementById(j.dataset.jump); if(t){ const y=t.getBoundingClientRect().top+scrollY-document.querySelector('header.top').offsetHeight-10; scrollTo({top:y,behavior:'smooth'}); } }
 });
-window.addEventListener('popstate', ()=>{ const h=location.hash.slice(1); if(I[h]) go(h,false); else { current=null; welcome(); } });
+window.addEventListener('popstate', ()=>{ const h=location.hash.slice(1); if(I[h]||h==='cycles') go(h,false); else { current=null; welcome(); } });
 const start = location.hash.slice(1);
-if(I[start]) go(start,false); else go(byName('Radon'), false);
+if(I[start]||start==='cycles') go(start,false); else go(byName('Radon'), false);
 })();
 </script>
 
