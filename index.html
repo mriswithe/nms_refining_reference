@@ -102,6 +102,10 @@ details.cyc>summary::after{content:"";grid-column:2;grid-row:1/span 2;width:9px;
 details.cyc[open]>summary::after{transform:rotate(-135deg);margin:4px 6px 0 0}
 details.cyc>summary .peek{grid-column:1;color:var(--muted);font-size:13px;min-width:0}
 details.cyc[open]>summary{margin-bottom:10px}
+.callout{margin:10px 0 0;padding:8px 10px;border-radius:8px;background:var(--bg);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
+.callout a{color:var(--accent)}
+.tree .badge{margin-left:2px}
+.ctrl button:disabled{opacity:.45;cursor:not-allowed}
 .route{margin-top:12px;padding:12px;border-radius:9px;background:var(--bg)}
 .rsel{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .rsel select{font:inherit;font-size:14px;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);margin-left:4px}
@@ -125,7 +129,7 @@ footer a{color:inherit}
     <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="I need… (e.g. Radon, Chromatic Metal, Warp Cell)" aria-label="Search items" role="combobox" aria-expanded="false" aria-controls="results">
     <div id="results" class="results" role="listbox" hidden></div>
   </div>
-  <div class="quick" id="quick"><button class="pill ref" data-go="cycles">⟳ Conversion cycles</button><span class="lbl">Try:</span></div>
+  <div class="quick" id="quick"><button class="pill ref" data-go="cycles">⟳ Conversion cycles</button><button class="pill ref" data-go="consumables">⚗ Refining consumables</button><span class="lbl">Try:</span></div>
 </header>
 <main id="main"></main>
 <footer>Recipe data comes from the open-source <a href="https://github.com/AssistantNMS/App" target="_blank" rel="noopener">Assistant for No Man's Sky</a> dataset (extracted from game files, up to the Voyagers-era updates). Mining and buying notes are general guidance; Trade Terminal stock varies by system. Click any ingredient to look it up.</footer>
@@ -204,7 +208,7 @@ const byName = n => ids.find(id=>I[id].n===n && (I[id].rq || makes[id] || I[id].
 
 // ---------- render ----------
 const main = document.getElementById('main');
-const state = { refSort:'fewest' };
+const state = { refSort:'fewest', treeMode:'craft' };
 function recipeRow(r, selfId, kind){
   const [ins,[oid,oq],t,op] = r;
   const left = ins.map(([i,q])=>chip(i,q,i===selfId)).join('<span class="plus">+</span>');
@@ -215,22 +219,50 @@ function limited(rows, key, n=8){
   if(rows.length<=n || state['all_'+key]) return rows.join('') + (rows.length>n?`<button class="more" data-less="${key}">Show fewer</button>`:'');
   return rows.slice(0,n).join('') + `<button class="more" data-more="${key}">Show all ${rows.length}</button>`;
 }
-// recursive raw breakdown (crafting only; refined/base items stay leaves)
-function tree(id, mult, depth, seen){
-  const it = I[id];
-  if(!it.rq || depth>6 || seen.has(id)) return `<div class="leaf">${chip(id, fmt(mult))}</div>`;
-  const per = it.q||1; const runs = Math.ceil(mult/per);
-  const s2 = new Set(seen).add(id);
-  return `<details open><summary>${chip(id, fmt(mult))}${per>1?`<span class="q">(${runs} craft${runs>1?'s':''})</span>`:''}</summary>${it.rq.map(([c,q])=>tree(c,q*runs,depth+1,s2)).join('')}</details>`;
+// ---------- cost model: in-game base value of the raw inputs ----------
+const _cc = {}, _rc = {};
+const rawCost = id => I[id].v || 0;
+function craftCost(id, seen=new Set()){
+  if(id in _cc) return _cc[id]; const it=I[id];
+  if(!it.rq || seen.has(id)) return rawCost(id);
+  seen.add(id); const v = it.rq.reduce((s,[c,q])=>s+q*bestCost(c,seen),0)/(it.q||1); seen.delete(id);
+  return _cc[id] = v;
 }
-function totals(id){
+function refineBest(id){
+  if(id in _rc) return _rc[id];
+  let best = null;
+  ((makes[id]||{}).ref||[]).forEach(r=>{ if(r[0].some(([a])=>a===id)) return;
+    const c = r[0].reduce((s,[a,q])=>s+q*(I[a].rq?craftCost(a):rawCost(a)),0)/r[1][1];
+    if(!best || c<best.cost) best = {cost:c, r}; });
+  return _rc[id] = best;
+}
+function bestCost(id, seen){ if(!I[id].rq) return rawCost(id); const c=craftCost(id,seen), r=refineBest(id); return r && r.cost<c ? r.cost : c; }
+function cheaper(id){
+  if(!I[id].rq) return null; const r = refineBest(id); if(!r) return null; const c = craftCost(id);
+  return r.cost < c*0.995 ? {pct:Math.round((1-r.cost/c)*100), r:r.r, craft:c, refine:r.cost} : null;
+}
+const badge = ch => ch ? `<span class="tag t-refine badge" title="Refining uses about ${fmt(Math.round(ch.refine))} units of raw value per item vs ${fmt(Math.round(ch.craft))} to craft">Refine −${ch.pct}%</span>` : '';
+// recursive breakdown; in "smart" mode, parts that are cheaper to refine expand into their refiner inputs
+function tree(id, mult, depth, seen){
+  const it = I[id], ch = cheaper(id), smart = state.treeMode==='smart' && ch;
+  if((!it.rq && !smart) || depth>6 || seen.has(id)) return `<div class="leaf">${chip(id, fmt(mult))}</div>`;
+  const s2 = new Set(seen).add(id);
+  if(smart){ const r = ch.r, runs = Math.ceil(mult/r[1][1]);
+    return `<details open><summary>${chip(id, fmt(mult))}<span class="tag t-refine">Refine</span><span class="q">${esc(r[3])}${runs>1?' ×'+runs:''}</span></summary>${r[0].map(([c,q])=>tree(c,q*runs,depth+1,s2)).join('')}</details>`; }
+  const per = it.q||1; const runs = Math.ceil(mult/per);
+  return `<details open><summary>${chip(id, fmt(mult))}${per>1?`<span class="q">(${runs} craft${runs>1?'s':''})</span>`:''}${badge(ch)}</summary>${it.rq.map(([c,q])=>tree(c,q*runs,depth+1,s2)).join('')}</details>`;
+}
+function totals(id, smart){
   const acc = {};
-  (function walk(id, mult, depth, seen){ const it=I[id];
-    if(!it.rq || depth>6 || seen.has(id)){ acc[id]=(acc[id]||0)+mult; return; }
-    const runs=Math.ceil(mult/(it.q||1)); const s2=new Set(seen).add(id);
+  (function walk(id, mult, depth, seen){ const it=I[id], ch = smart && depth>0 ? cheaper(id) : null;
+    if((!it.rq && !ch) || depth>6 || seen.has(id)){ acc[id]=(acc[id]||0)+mult; return; }
+    const s2=new Set(seen).add(id);
+    if(ch){ const runs=Math.ceil(mult/ch.r[1][1]); ch.r[0].forEach(([c,q])=>walk(c,q*runs,depth+1,s2)); return; }
+    const runs=Math.ceil(mult/(it.q||1));
     it.rq.forEach(([c,q])=>walk(c,q*runs,depth+1,s2)); })(id,1,0,new Set());
   return Object.entries(acc).sort((a,b)=>b[1]-a[1]);
 }
+const totalValue = list => list.reduce((s,[i,q])=>s+q*rawCost(i),0);
 function render(id){
   const it = I[id]; if(!it){ welcome(); return; }
   const m = makes[id]||{ref:[],cook:[]}, u = uses[id]||{ref:[],cook:[],craft:[]};
@@ -253,10 +285,15 @@ function render(id){
   if(c.craft){
     h += `<section class="card k-craft" id="s-craft"><h3>Craft <span class="ct">${it.q>1?'makes '+fmt(it.q):''}</span></h3>
       <div class="rlist"><div class="row">${it.rq.map(([i,q])=>chip(i,q)).join('<span class="plus">+</span>')}<span class="arrow">→</span>${chip(id,it.q||1,true)}</div></div>`;
-    const deep = it.rq.some(([i])=>I[i].rq);
+    const self = cheaper(id);
+    if(self) h += `<p class="callout">${badge(self)} Refining ${esc(it.n)} is about ${self.pct}% cheaper than crafting it. <a href="#" data-jump="s-refine">See refiner recipes</a></p>`;
+    const deep = it.rq.some(([i])=>I[i].rq || cheaper(i));
     if(deep){
-      h += `<div class="grid2" style="margin-top:12px"><div><div class="note"><b>Full crafting tree</b></div><div class="ctrl" style="margin-top:6px"><button data-tree="open">Expand all</button><button data-tree="close">Collapse all</button></div><div class="tree">${tree(id,1,0,new Set())}</div></div>
-        <div><div class="note"><b>Total base ingredients</b> (expanding crafted parts)</div><div class="totals" style="margin-top:6px">${totals(id).map(([i,q])=>chip(i,fmt(q))).join('')}</div></div></div>`;
+      const smart = state.treeMode==='smart', tot = totals(id, smart), any = (function f(x,d,s){ if(d>6||s.has(x)) return false; s=new Set(s).add(x); return (d>0&&!!cheaper(x)) || (I[x].rq||[]).some(([c])=>f(c,d+1,s)); })(id,0,new Set());
+      const plain = totalValue(totals(id,false)), sm = totalValue(totals(id,true));
+      h += `<div class="ctrl" role="group" aria-label="Tree mode" style="margin-top:12px"><button data-tmode="craft" aria-pressed="${!smart}">Craft everything</button><button data-tmode="smart" aria-pressed="${smart}"${any?'':' disabled title="No part of this is cheaper to refine"'}>Refine where cheaper</button>${any?`<span class="note" style="margin:0;align-self:center">Saves about <b>${Math.round((1-sm/plain)*100)}%</b> of raw value (${fmt(Math.round(plain))} → ${fmt(Math.round(sm))} units)</span>`:''}</div>
+      <div class="grid2"><div><div class="note"><b>Full ${smart?'build':'crafting'} tree</b></div><div class="ctrl" style="margin-top:6px"><button data-tree="open">Expand all</button><button data-tree="close">Collapse all</button></div><div class="tree">${tree(id,1,0,new Set())}</div></div>
+        <div><div class="note"><b>Total base ingredients</b> (${smart?'refining where cheaper':'crafting every part'}) · about ${fmt(Math.round(totalValue(tot)))} units of raw value</div><div class="totals" style="margin-top:6px">${tot.map(([i,q])=>chip(i,fmt(q))).join('')}</div></div></div>`;
     }
     h += `</section>`;
   }
@@ -378,29 +415,54 @@ function renderCycles(){
   h += `<details class="card k-refine cyc" data-cy="stellar"${cycOpen.has('stellar')?' open':''}><summary><h3>Stellar metals <span class="ct">no colour-to-colour cycle</span></h3><span class="peek">Double any stellar metal with Chromatic Metal</span></summary><p class="note" style="margin:0 0 6px">Stellar metals can't be turned into each other. You can double any of them with Chromatic Metal.</p><div class="rlist">${expand.map(r=>recipeRow(r,null,'ref')).join('')}</div></details>`;
   h += `<details class="card k-refine cyc" data-cy="oneway"${cycOpen.has('oneway')?' open':''}><summary><h3>One-way upgrades <span class="ct">${oneway.length}</span></h3><span class="peek">${[...new Set(oneway.map(r=>I[r[1][0]].n))].sort().join(' · ')}</span></summary><div class="rlist">${limited(oneway.sort((p,q)=>I[p[1][0]].n.localeCompare(I[q[1][0]].n)).map(r=>recipeRow(r,null,'ref')),'oneway',12)}</div></details>`;  main.innerHTML = h;
 }
+// ---------- refinable consumables ----------
+const NOT_CONSUMABLE = new Set(['Alloy Metal','Enhanced Gas Product','Advanced Agricultural Product']);
+const consumables = [...new Set(D.ref.map(r=>r[1][0]))].filter(id=>!id.startsWith('raw') && !NOT_CONSUMABLE.has(I[id].g))
+  .sort((a,b)=>I[a].g.localeCompare(I[b].g) || I[a].n.localeCompare(I[b].n));
+const refinerSize = n => n===1 ? 'Portable refiner' : n===2 ? 'Medium refiner' : 'Large refiner';
+function renderConsumables(){
+  let h = `<div class="head"><span class="sw" style="background:var(--refine)" aria-hidden="true">⚗</span><div><h2>Refining consumables</h2><div class="sub">Charges, fuels and ammo you can make in a refiner, compared with crafting. Cost is the in-game base value of the raw inputs per item.</div></div></div>`;
+  h += `<nav class="summary" aria-label="Consumables">${consumables.map(id=>`<a href="#" data-jump="cn-${id}">${esc(I[id].n)}</a>`).join('')}</nav>`;
+  consumables.forEach(id=>{ const it=I[id];
+    const rs = (makes[id]||{ref:[]}).ref.map(r=>({r, cost:r[0].reduce((s,[a,q])=>s+q*(I[a].rq?craftCost(a):rawCost(a)),0)/r[1][1]})).sort((a,b)=>a.cost-b.cost);
+    const cc = it.rq ? craftCost(id) : null;
+    h += `<section class="card k-refine" id="cn-${id}"><div class="head" style="margin-bottom:10px">${sw(id)}<div><h3 style="margin:0">${esc(it.n)}</h3><div class="sub">${esc(it.g)}</div></div></div>`;
+    if(it.rq) h += `<div class="note" style="margin:0"><b>Craft</b> · about ${fmt(Math.round(cc))} units each</div><div class="rlist"><div class="row">${it.rq.map(([i,q])=>chip(i,q)).join('<span class="plus">+</span>')}<span class="arrow">→</span>${chip(id,it.q||1,true)}</div></div>`;
+    else h += `<p class="note" style="margin:0">No crafting recipe; refining is the only way to make it.</p>`;
+    h += `<div class="note"><b>Refine</b> · ${rs.length} recipe${rs.length>1?'s':''}</div><div class="rlist">`;
+    rs.forEach(({r,cost},k)=>{
+      const tags = [k===0 && rs.length>1 && cost < rs[1].cost*0.995 ? '<span class="tag t-cook">Cheapest</span>' : '', cc!=null && cost < cc*0.995 ? `<span class="tag t-refine">−${Math.round((1-cost/cc)*100)}% vs craft</span>` : (cc!=null && cost > cc*1.005 ? '<span class="tag t-buy">Costs more than crafting</span>' : '')].join('');
+      h += recipeRow(r,id,'ref').replace('<span class="op">', `<span class="op">${tags} about ${fmt(Math.round(cost))} units each · ${refinerSize(r[0].length)} · `);
+    });
+    h += `</div></section>`;
+  });
+  main.innerHTML = h;
+}
 main.addEventListener('change', e=>{ const s=e.target.closest('[data-route]'); if(!s) return;
   const c=cyc[s.dataset.route]; c[s.dataset.end]=s.value; const id=s.id; rerender(); const el=document.getElementById(id); el&&el.focus(); });
-function rerender(){ if(current==='cycles') renderCycles(); else render(current); }
+const VIEWS = {cycles: renderCycles, consumables: renderConsumables};
+function rerender(){ if(VIEWS[current]) VIEWS[current](); else render(current); }
 
 let current = null;
 function go(id, push=true){
-  if(id==='cycles'){ current='cycles'; resEl.hidden=true; renderCycles(); window.scrollTo({top:0});
-    if(push){ try{ history.pushState(null,'','#cycles'); }catch(e){} } return; }
+  if(VIEWS[id]){ current=id; resEl.hidden=true; VIEWS[id](); window.scrollTo({top:0});
+    if(push){ try{ history.pushState(null,'','#'+id); }catch(e){} } return; }
   if(!I[id]) return; current=id; resEl.hidden=true; qEl.value=''; qEl.blur();
   render(id); window.scrollTo({top:0});
   if(push){ try{ history.pushState(null,'','#'+id); }catch(e){ try{ location.hash=id; }catch(_){} } }
 }
 main.addEventListener('click', e=>{
   const ca=e.target.closest('[data-cyall]'); if(ca){ const open=ca.dataset.cyall==='open'; main.querySelectorAll('details.cyc').forEach(d=>{ d.open=open; }); return; }
+  const tm=e.target.closest('[data-tmode]'); if(tm){ state.treeMode=tm.dataset.tmode; rerender(); return; }
   const tr=e.target.closest('[data-tree]'); if(tr){ const open=tr.dataset.tree==='open'; main.querySelectorAll('.tree details').forEach((d,i)=>{ d.open = open || i===0; }); return; }
   const s=e.target.closest('[data-sort]'); if(s){ state.refSort=s.dataset.sort; rerender(); return; }
   const mo=e.target.closest('[data-more]'); if(mo){ state['all_'+mo.dataset.more]=true; rerender(); return; }
   const le=e.target.closest('[data-less]'); if(le){ state['all_'+le.dataset.less]=false; rerender(); return; }
   const j=e.target.closest('[data-jump]'); if(j){ e.preventDefault(); const t=document.getElementById(j.dataset.jump); if(t){ const y=t.getBoundingClientRect().top+scrollY-document.querySelector('header.top').offsetHeight-10; scrollTo({top:y,behavior:'smooth'}); } }
 });
-window.addEventListener('popstate', ()=>{ const h=location.hash.slice(1); if(I[h]||h==='cycles') go(h,false); else { current=null; welcome(); } });
+window.addEventListener('popstate', ()=>{ const h=location.hash.slice(1); if(I[h]||VIEWS[h]) go(h,false); else { current=null; welcome(); } });
 const start = location.hash.slice(1);
-if(I[start]||start==='cycles') go(start,false); else go(byName('Radon'), false);
+if(I[start]||VIEWS[start]) go(start,false); else go(byName('Radon'), false);
 })();
 </script>
 
